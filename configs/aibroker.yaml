@@ -1,6 +1,16 @@
-agent:
-  command: "echo"
-  args: ["agent-not-configured"]
+mode: http
+listen: ":8080"
+
+upstream:
+  url: "http://your-llm-endpoint"
+  api_key: ""
+  timeout: 5m
+
+  headers:
+    ContinueDevProject: ""
+
+  tls:
+    insecure: false
 
 log:
   level: info
@@ -9,3 +19,7 @@ log:
 pipeline:
   - name: logging
     middleware: logging
+  - name: dump
+    middleware: dump
+    config:
+      dir: dumps

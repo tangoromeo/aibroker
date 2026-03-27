@@ -2,18 +2,22 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
 	"aibroker/internal/config"
-	"aibroker/internal/middleware"
+	"aibroker/internal/httpproxy"
+	mw "aibroker/internal/middleware"
 	"aibroker/internal/proxy"
 	"aibroker/internal/transport"
 )
@@ -34,6 +38,87 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	switch cfg.Mode {
+	case "http":
+		runHTTP(ctx, cfg, logger)
+	case "stdio":
+		runStdio(ctx, cfg, logger)
+	}
+}
+
+func runHTTP(ctx context.Context, cfg *config.Config, logger *slog.Logger) {
+	var mws []httpproxy.Middleware
+	for _, stage := range cfg.Pipeline {
+		switch stage.Middleware {
+		case "logging":
+			mws = append(mws, httpproxy.Logging(logger))
+		case "dump":
+			dir := "dumps"
+			if v, ok := stage.Config["dir"].(string); ok {
+				dir = v
+			}
+			mws = append(mws, httpproxy.RequestDump(dir, logger))
+		case "context_trim":
+			trimCfg := httpproxy.ContextTrimConfig{}
+			if v, ok := stage.Config["max_tokens"].(int); ok {
+				trimCfg.MaxTokens = v
+			}
+			if v, ok := stage.Config["system_max_tokens"].(int); ok {
+				trimCfg.SystemMaxTokens = v
+			}
+			if v, ok := stage.Config["preserve_last_n"].(int); ok {
+				trimCfg.PreserveLastN = v
+			}
+			mws = append(mws, httpproxy.ContextTrim(trimCfg, logger))
+		default:
+			logger.Error("unknown middleware", "name", stage.Middleware)
+			os.Exit(1)
+		}
+	}
+
+	var pipeline httpproxy.Middleware
+	if len(mws) > 0 {
+		pipeline = httpproxy.Compose(mws...)
+	}
+
+	httpClient, err := buildHTTPClient(cfg)
+	if err != nil {
+		logger.Error("configure TLS", "err", err)
+		os.Exit(1)
+	}
+
+	p := httpproxy.New(httpproxy.Config{
+		Upstream:   cfg.Upstream.URL,
+		APIKey:     cfg.Upstream.APIKey,
+		Timeout:    cfg.Upstream.Timeout,
+		Headers:    cfg.Upstream.Headers,
+		HTTPClient: httpClient,
+	}, pipeline, logger)
+
+	srv := &http.Server{
+		Addr:    cfg.Listen,
+		Handler: p,
+	}
+
+	go func() {
+		<-ctx.Done()
+		logger.Info("shutting down")
+		_ = srv.Close()
+	}()
+
+	logger.Info("aibroker http proxy started",
+		"listen", cfg.Listen,
+		"upstream", cfg.Upstream.URL,
+	)
+
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Error("server error", "err", err)
+		os.Exit(1)
+	}
+	logger.Info("aibroker stopped")
+}
+
+func runStdio(ctx context.Context, cfg *config.Config, logger *slog.Logger) {
 	front := transport.NewStdioTransport(os.Stdin, os.Stdout)
 	back, err := transport.NewProcessTransport(ctx, cfg.Agent.Command, cfg.Agent.Args, cfg.Agent.Env)
 	if err != nil {
@@ -41,7 +126,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	mws, err := buildPipeline(cfg, logger)
+	mws, err := buildStdioPipeline(cfg, logger)
 	if err != nil {
 		_ = back.Close()
 		logger.Error("build pipeline", "err", err)
@@ -51,18 +136,29 @@ func main() {
 	chain := proxy.Compose(mws...)
 	p := proxy.NewProxy(front, back, chain, logger)
 
-	logger.Info("aibroker started", "config", *configPath)
+	logger.Info("aibroker stdio proxy started")
 
 	err = p.Run(ctx)
 	switch {
-	case err == nil:
-		logger.Info("aibroker stopped")
-	case errors.Is(err, context.Canceled), errors.Is(err, io.EOF):
+	case err == nil, errors.Is(err, context.Canceled), errors.Is(err, io.EOF):
 		logger.Info("aibroker stopped")
 	default:
 		logger.Error("aibroker exited", "err", err)
 		os.Exit(1)
 	}
+}
+
+func buildStdioPipeline(cfg *config.Config, logger *slog.Logger) ([]proxy.Middleware, error) {
+	var mws []proxy.Middleware
+	for _, stage := range cfg.Pipeline {
+		switch stage.Middleware {
+		case "logging":
+			mws = append(mws, mw.Logging(logger))
+		default:
+			return nil, fmt.Errorf("unknown middleware %q in stage %q", stage.Middleware, stage.Name)
+		}
+	}
+	return mws, nil
 }
 
 func newLogger(cfg *config.Config) *slog.Logger {
@@ -91,15 +187,42 @@ func parseLogLevel(s string) slog.Level {
 	}
 }
 
-func buildPipeline(cfg *config.Config, logger *slog.Logger) ([]proxy.Middleware, error) {
-	var mws []proxy.Middleware
-	for _, stage := range cfg.Pipeline {
-		switch stage.Middleware {
-		case "logging":
-			mws = append(mws, middleware.Logging(logger))
-		default:
-			return nil, fmt.Errorf("unknown middleware %q in stage %q", stage.Middleware, stage.Name)
-		}
+func buildHTTPClient(cfg *config.Config) (*http.Client, error) {
+	tlsCfg := &tls.Config{}
+	custom := false
+
+	if cfg.Upstream.TLS.Insecure {
+		tlsCfg.InsecureSkipVerify = true
+		custom = true
 	}
-	return mws, nil
+
+	if cfg.Upstream.TLS.CACert != "" {
+		caCert, err := os.ReadFile(cfg.Upstream.TLS.CACert)
+		if err != nil {
+			return nil, fmt.Errorf("read CA cert: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("invalid CA cert: %s", cfg.Upstream.TLS.CACert)
+		}
+		tlsCfg.RootCAs = pool
+		custom = true
+	}
+
+	if cfg.Upstream.TLS.ClientCert != "" {
+		cert, err := tls.LoadX509KeyPair(cfg.Upstream.TLS.ClientCert, cfg.Upstream.TLS.ClientKey)
+		if err != nil {
+			return nil, fmt.Errorf("load client cert: %w", err)
+		}
+		tlsCfg.Certificates = []tls.Certificate{cert}
+		custom = true
+	}
+
+	if !custom {
+		return nil, nil
+	}
+
+	return &http.Client{
+		Transport: &http.Transport{TLSClientConfig: tlsCfg},
+	}, nil
 }

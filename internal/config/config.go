@@ -4,14 +4,33 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Agent    AgentConfig   `yaml:"agent"`
-	Pipeline []StageConfig `yaml:"pipeline"`
-	Log      LogConfig     `yaml:"log"`
+	Mode     string         `yaml:"mode"` // "http" or "stdio"
+	Listen   string         `yaml:"listen"`
+	Upstream UpstreamConfig `yaml:"upstream"`
+	Agent    AgentConfig    `yaml:"agent"`
+	Pipeline []StageConfig  `yaml:"pipeline"`
+	Log      LogConfig      `yaml:"log"`
+}
+
+type UpstreamConfig struct {
+	URL       string            `yaml:"url"`
+	APIKey    string            `yaml:"api_key"`
+	Timeout   time.Duration     `yaml:"timeout"`
+	TLS       TLSConfig         `yaml:"tls"`
+	Headers   map[string]string `yaml:"headers"`
+}
+
+type TLSConfig struct {
+	Insecure     bool   `yaml:"insecure"`       // skip TLS verification (testing only)
+	CACert       string `yaml:"ca_cert"`         // path to custom CA certificate
+	ClientCert   string `yaml:"client_cert"`     // path to client certificate
+	ClientKey    string `yaml:"client_key"`      // path to client certificate key
 }
 
 type AgentConfig struct {
@@ -36,10 +55,18 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	cfg := &Config{
+		Mode:   "http",
+		Listen: ":8080",
+	}
+	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, err
 	}
+	applyDefaults(cfg)
+	return cfg, validate(cfg)
+}
+
+func applyDefaults(cfg *Config) {
 	if cfg.Log.Level == "" {
 		cfg.Log.Level = "info"
 	}
@@ -48,10 +75,28 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.Log.Level = strings.ToLower(cfg.Log.Level)
 	cfg.Log.Format = strings.ToLower(cfg.Log.Format)
+	if cfg.Upstream.Timeout == 0 {
+		cfg.Upstream.Timeout = 5 * time.Minute
+	}
+}
+
+func validate(cfg *Config) error {
 	switch cfg.Log.Format {
 	case "text", "json":
 	default:
-		return nil, fmt.Errorf("config: log.format must be text or json, got %q", cfg.Log.Format)
+		return fmt.Errorf("config: log.format must be text or json, got %q", cfg.Log.Format)
 	}
-	return &cfg, nil
+	switch cfg.Mode {
+	case "http":
+		if cfg.Upstream.URL == "" {
+			return fmt.Errorf("config: upstream.url is required in http mode")
+		}
+	case "stdio":
+		if cfg.Agent.Command == "" {
+			return fmt.Errorf("config: agent.command is required in stdio mode")
+		}
+	default:
+		return fmt.Errorf("config: mode must be http or stdio, got %q", cfg.Mode)
+	}
+	return nil
 }
