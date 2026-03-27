@@ -1,0 +1,11 @@
+agent:
+  command: "echo"
+  args: ["agent-not-configured"]
+
+log:
+  level: info
+  format: text
+
+pipeline:
+  - name: logging
+    middleware: logging
