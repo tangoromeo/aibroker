@@ -1,9 +1,11 @@
 package httpproxy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -80,12 +82,10 @@ func ToolAdapter(logger *slog.Logger) Middleware {
 				return resp, err
 			}
 
-			// For streaming responses, pass through — rely on schema simplification.
 			if req.Stream || isSSE(resp) {
-				return resp, nil
+				return normalizeToolCallSSE(resp, origSchemas, logger), nil
 			}
 
-			// Non-streaming: normalize tool_call arguments.
 			return normalizeToolCallResp(resp, origSchemas, logger)
 		}
 	}
@@ -326,6 +326,181 @@ func findNullableRequired(schema map[string]any, prefix string, os *origSchema) 
 			findNullableRequired(items, fullName, os)
 		}
 	}
+}
+
+// --- SSE stream normalization ---
+
+// normalizeToolCallSSE wraps the SSE response body. It buffers all events,
+// reassembles tool_call arguments from delta chunks, fixes them, and re-emits
+// corrected events. Text-only streams pass through untouched.
+func normalizeToolCallSSE(resp *http.Response, schemas map[string]*origSchema, logger *slog.Logger) *http.Response {
+	pr, pw := io.Pipe()
+	origBody := resp.Body
+
+	go func() {
+		defer origBody.Close()
+		defer pw.Close()
+
+		type tcAccum struct {
+			name string
+			args strings.Builder
+			id   string
+			idx  float64
+		}
+
+		scanner := bufio.NewScanner(origBody)
+		scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
+
+		var accum []*tcAccum
+		var passthrough [][]byte
+		hasToolCalls := false
+		var finishChunk []byte
+		var usageChunk []byte
+
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			lineCopy := make([]byte, len(line))
+			copy(lineCopy, line)
+
+			if !bytes.HasPrefix(lineCopy, []byte("data: ")) {
+				passthrough = append(passthrough, lineCopy)
+				continue
+			}
+
+			payload := bytes.TrimPrefix(lineCopy, []byte("data: "))
+			if bytes.Equal(payload, []byte("[DONE]")) {
+				continue // handled at the end
+			}
+
+			var chunk map[string]any
+			if json.Unmarshal(payload, &chunk) != nil {
+				passthrough = append(passthrough, lineCopy)
+				continue
+			}
+
+			choices, _ := chunk["choices"].([]any)
+			if len(choices) == 0 {
+				// Usage chunk or empty choices — save for re-emission.
+				if usageChunk == nil {
+					usageChunk = lineCopy
+				}
+				continue
+			}
+
+			choice, _ := choices[0].(map[string]any)
+			if choice == nil {
+				passthrough = append(passthrough, lineCopy)
+				continue
+			}
+
+			// Check finish_reason.
+			if fr, _ := choice["finish_reason"].(string); fr == "tool_calls" {
+				hasToolCalls = true
+				finishChunk = lineCopy
+				continue
+			}
+
+			delta, _ := choice["delta"].(map[string]any)
+			if delta == nil {
+				passthrough = append(passthrough, lineCopy)
+				continue
+			}
+
+			tcs, _ := delta["tool_calls"].([]any)
+			if len(tcs) == 0 {
+				// Regular content delta — pass through immediately.
+				passthrough = append(passthrough, lineCopy)
+				continue
+			}
+
+			// Accumulate tool_call deltas.
+			for _, tc := range tcs {
+				tcMap, _ := tc.(map[string]any)
+				if tcMap == nil {
+					continue
+				}
+				idx, _ := tcMap["index"].(float64)
+
+				for len(accum) <= int(idx) {
+					accum = append(accum, &tcAccum{})
+				}
+				a := accum[int(idx)]
+
+				if id, ok := tcMap["id"].(string); ok && id != "" {
+					a.id = id
+					a.idx = idx
+				}
+				if fn, ok := tcMap["function"].(map[string]any); ok {
+					if name, ok := fn["name"].(string); ok && name != "" {
+						a.name = name
+					}
+					if args, ok := fn["arguments"].(string); ok {
+						a.args.WriteString(args)
+					}
+				}
+			}
+		}
+
+		// Emit passthrough lines (text content).
+		for _, line := range passthrough {
+			fmt.Fprintf(pw, "%s\n", line)
+		}
+
+		if !hasToolCalls || len(accum) == 0 {
+			if finishChunk != nil {
+				fmt.Fprintf(pw, "%s\n\n", finishChunk)
+			}
+			if usageChunk != nil {
+				fmt.Fprintf(pw, "%s\n\n", usageChunk)
+			}
+			pw.Write([]byte("data: [DONE]\n\n"))
+			return
+		}
+
+		// Fix arguments and emit corrected tool_call chunks.
+		for _, a := range accum {
+			argsStr := a.args.String()
+			fixed := fixArguments(a.name, argsStr, schemas, logger)
+			if fixed != argsStr {
+				logger.Info("tool_adapter: fixed SSE tool_call args",
+					"tool", a.name, "original", argsStr, "fixed", fixed)
+			}
+
+			// Emit as a single chunk with the complete corrected tool_call.
+			tcChunk := map[string]any{
+				"id":      a.id,
+				"type":    "function",
+				"index":   a.idx,
+				"function": map[string]any{
+					"name":      a.name,
+					"arguments": fixed,
+				},
+			}
+			delta := map[string]any{
+				"tool_calls": []any{tcChunk},
+			}
+			// Re-use the original chunk structure for metadata.
+			out := map[string]any{
+				"object":  "chat.completion.chunk",
+				"choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": nil}},
+			}
+			b, _ := json.Marshal(out)
+			fmt.Fprintf(pw, "data: %s\n\n", b)
+		}
+
+		// Emit finish_reason chunk.
+		if finishChunk != nil {
+			fmt.Fprintf(pw, "%s\n\n", finishChunk)
+		}
+		if usageChunk != nil {
+			fmt.Fprintf(pw, "%s\n\n", usageChunk)
+		}
+		fmt.Fprintf(pw, "data: [DONE]\n\n")
+	}()
+
+	resp.Body = pr
+	resp.ContentLength = -1
+	return resp
 }
 
 // --- response normalization ---
