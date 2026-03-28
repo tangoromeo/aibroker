@@ -13,8 +13,7 @@ upstream:
 
 # Broker: screening + escalation orchestration
 broker:
-  min_failures: 3      # how many failures before escalation triggers
-  force_escalation: true  # every request goes through escalation pipeline (for testing)
+  min_failures: 3  # how many failures before escalation triggers
 
   # Screening LLM — evaluates security policies (can be the same endpoint)
   screening:
@@ -105,7 +104,9 @@ pipeline:
   - middleware: logging
   - middleware: tool_adapter
   - middleware: dump
-  - middleware: escalation_detect
+  # escalation_detect убран — shape/screen/forward работают на каждый запрос
+  # верни escalation_detect когда нужно чтобы эскалация срабатывала только по failures
+  #- middleware: escalation_detect
   - middleware: escalation_shape
   - middleware: escalation_screen
   - middleware: escalation_forward

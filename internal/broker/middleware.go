@@ -87,15 +87,36 @@ func ScreenMiddleware(policy PolicyEngine, logger *slog.Logger) httpproxy.Middle
 
 // ShapeMiddleware minimizes context via LLM for the external model.
 // Stores shaped body in EscalationState, does NOT modify the original request.
+// If DetectMiddleware is absent from the pipeline, Shape creates the state itself.
 func ShapeMiddleware(shaper ContextShaper, targetModel string, logger *slog.Logger) httpproxy.Middleware {
 	return func(next httpproxy.Handler) httpproxy.Handler {
 		return func(ctx context.Context, req *httpproxy.ProxyRequest) (*http.Response, error) {
+			if !strings.HasSuffix(req.HTTP.URL.Path, "/chat/completions") {
+				return next(ctx, req)
+			}
+
 			state := getState(ctx)
-			if state == nil || !state.Triggered {
+			if state == nil {
+				// No detect step in pipeline — create state ourselves.
+				state = &EscalationState{Triggered: true, Signal: EscalationSignal{
+					ShouldEscalate: true, Reason: "no detect in pipeline", Pattern: "direct",
+				}}
+				ctx = withState(ctx, state)
+			}
+			if !state.Triggered {
 				return next(ctx, req)
 			}
 
 			chatReq := getChatReq(ctx)
+			if chatReq == nil {
+				var cr ChatRequest
+				if err := json.Unmarshal(req.BodyRaw, &cr); err != nil {
+					return next(ctx, req)
+				}
+				chatReq = &cr
+				ctx = context.WithValue(ctx, chatReqKey{}, chatReq)
+			}
+
 			shaped, err := shaper.Shape(ctx, chatReq, state.Permission, targetModel)
 			if err != nil {
 				logger.Error("shape failed", "err", err)
