@@ -82,6 +82,9 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Expand ${VAR} and $VAR references from environment.
+	data = []byte(os.ExpandEnv(string(data)))
+
 	cfg := &Config{
 		Mode:   "http",
 		Listen: ":8080",

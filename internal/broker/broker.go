@@ -59,7 +59,7 @@ func Build(cfg Config, logger *slog.Logger) *Registry {
 		mw: map[string]httpproxy.Middleware{
 			"escalation_detect":  DetectMiddleware(detector, log),
 			"escalation_screen":  ScreenMiddleware(policy, log),
-			"escalation_shape":   ShapeMiddleware(shaper, cfg.ExternalLLM.Model, log),
+			"escalation_shape":   ShapeMiddleware(shaper, cfg.ExternalLLM.Model, cfg.StubDir, log),
 			"escalation_forward": ForwardMiddleware(esc, validator, cfg.ExternalLLM.Model, log),
 		},
 	}

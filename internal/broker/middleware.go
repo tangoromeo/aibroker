@@ -3,9 +3,13 @@ package broker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"aibroker/internal/httpproxy"
 )
@@ -88,7 +92,12 @@ func ScreenMiddleware(policy PolicyEngine, logger *slog.Logger) httpproxy.Middle
 // ShapeMiddleware minimizes context via LLM for the external model.
 // Stores shaped body in EscalationState, does NOT modify the original request.
 // If DetectMiddleware is absent from the pipeline, Shape creates the state itself.
-func ShapeMiddleware(shaper ContextShaper, targetModel string, logger *slog.Logger) httpproxy.Middleware {
+// Always dumps shaped body to dumpDir for visibility.
+func ShapeMiddleware(shaper ContextShaper, targetModel string, dumpDir string, logger *slog.Logger) httpproxy.Middleware {
+	if dumpDir != "" {
+		_ = os.MkdirAll(dumpDir, 0o755)
+	}
+	var seq atomic.Int64
 	return func(next httpproxy.Handler) httpproxy.Handler {
 		return func(ctx context.Context, req *httpproxy.ProxyRequest) (*http.Response, error) {
 			if !strings.HasSuffix(req.HTTP.URL.Path, "/chat/completions") {
@@ -129,6 +138,15 @@ func ShapeMiddleware(shaper ContextShaper, targetModel string, logger *slog.Logg
 				"tokens_est", shaped.TokenEstimate,
 			)
 			state.Shaped = shaped
+
+			if dumpDir != "" {
+				n := seq.Add(1)
+				path := filepath.Join(dumpDir, fmt.Sprintf("shaped_%d.json", n))
+				if err := os.WriteFile(path, shaped.Body, 0o644); err == nil {
+					logger.Info("shaped body dumped", "path", path)
+				}
+			}
+
 			return next(ctx, req)
 		}
 	}
