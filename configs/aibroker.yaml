@@ -13,7 +13,8 @@ upstream:
 
 # Broker: screening + escalation orchestration
 broker:
-  min_failures: 3  # how many failures before escalation triggers
+  min_failures: 3      # how many failures before escalation triggers
+  force_escalation: true  # every request goes through escalation pipeline (for testing)
 
   # Screening LLM — evaluates security policies (can be the same endpoint)
   screening:

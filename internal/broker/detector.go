@@ -8,6 +8,19 @@ import (
 	"time"
 )
 
+// AlwaysDetector unconditionally triggers escalation on every request.
+// Used for testing policies and the escalation pipeline.
+type AlwaysDetector struct{}
+
+func (AlwaysDetector) Analyze(_ *ChatRequest) EscalationSignal {
+	return EscalationSignal{
+		ShouldEscalate: true,
+		Reason:         "force_escalation mode",
+		FailureCount:   0,
+		Pattern:        "forced",
+	}
+}
+
 // PatternDetector analyzes recent conversation history for failure patterns.
 type PatternDetector struct {
 	minFailures int

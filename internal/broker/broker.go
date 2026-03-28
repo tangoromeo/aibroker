@@ -13,12 +13,13 @@ import (
 )
 
 type Config struct {
-	ScreeningLLM   LLMEndpoint    `yaml:"screening"`
-	ExternalLLM    LLMEndpoint    `yaml:"escalation"`
-	Policies       []PolicyConfig `yaml:"policies"`
-	MinFailures    int            `yaml:"min_failures"`
-	EscalationMode string
-	StubDir        string
+	ScreeningLLM    LLMEndpoint    `yaml:"screening"`
+	ExternalLLM     LLMEndpoint    `yaml:"escalation"`
+	Policies        []PolicyConfig `yaml:"policies"`
+	MinFailures     int            `yaml:"min_failures"`
+	ForceEscalation bool
+	EscalationMode  string
+	StubDir         string
 }
 
 // Registry holds all broker middleware, keyed by name for the pipeline.
@@ -43,7 +44,13 @@ func Build(cfg Config, logger *slog.Logger) *Registry {
 		esc = NewLLMClient(cfg.ExternalLLM, log)
 	}
 
-	detector := NewPatternDetector(cfg.MinFailures, log)
+	var detector FailureDetector
+	if cfg.ForceEscalation {
+		detector = AlwaysDetector{}
+		log.Warn("force_escalation enabled — every request will trigger escalation pipeline")
+	} else {
+		detector = NewPatternDetector(cfg.MinFailures, log)
+	}
 	policy := NewLLMPolicyEngine(screenClient, cfg.Policies, log)
 	shaper := NewLLMContextShaper(screenClient, cfg.Policies, log)
 	validator := NewBasicValidator()

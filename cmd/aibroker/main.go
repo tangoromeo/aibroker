@@ -68,7 +68,8 @@ func runHTTP(ctx context.Context, cfg *config.Config, logger *slog.Logger) {
 				Timeout: cfg.Broker.Escalation.Timeout,
 				Headers: cfg.Broker.Escalation.Headers,
 			},
-			MinFailures: cfg.Broker.MinFailures,
+			MinFailures:     cfg.Broker.MinFailures,
+			ForceEscalation: cfg.Broker.ForceEscalation,
 		}
 		for _, pd := range cfg.Broker.Policies {
 			brokerCfg.Policies = append(brokerCfg.Policies, broker.PolicyConfig{
@@ -83,6 +84,7 @@ func runHTTP(ctx context.Context, cfg *config.Config, logger *slog.Logger) {
 		logger.Info("broker registered",
 			"steps", brokerReg.Names(),
 			"escalation_mode", cfg.Broker.EscalationMode,
+			"force_escalation", cfg.Broker.ForceEscalation,
 			"policies", len(cfg.Broker.Policies),
 		)
 	}

@@ -20,12 +20,13 @@ type Config struct {
 }
 
 type BrokerConfig struct {
-	MinFailures    int               `yaml:"min_failures"`
-	Screening      LLMEndpointConfig `yaml:"screening"`
-	Escalation     LLMEndpointConfig `yaml:"escalation"`
-	EscalationMode string            `yaml:"escalation_mode"` // "stub" or "live"
-	StubDir        string            `yaml:"stub_dir"`
-	Policies       []PolicyDef       `yaml:"policies"`
+	MinFailures     int               `yaml:"min_failures"`
+	ForceEscalation bool              `yaml:"force_escalation"`
+	Screening       LLMEndpointConfig `yaml:"screening"`
+	Escalation      LLMEndpointConfig `yaml:"escalation"`
+	EscalationMode  string            `yaml:"escalation_mode"` // "stub" or "live"
+	StubDir         string            `yaml:"stub_dir"`
+	Policies        []PolicyDef       `yaml:"policies"`
 }
 
 type LLMEndpointConfig struct {
