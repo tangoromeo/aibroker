@@ -10,24 +10,11 @@ import (
 
 const shapingSystemPromptTemplate = `You are a context minimization and anonymization engine for a code escalation system.
 
-Your task: given a conversation between a coding assistant and a user, produce a MINIMAL, FOCUSED, ANONYMIZED request for an external expert model.
-
-STEP 1 — Identify the CORE problem the user is trying to solve.
-STEP 2 — Extract ONLY the code directly relevant to the problem.
-STEP 3 — Remove ALL tool definitions, system prompts, assistant metadata, chat scaffolding.
-STEP 4 — ANONYMIZE: replace every occurrence of the following with generic placeholders:
+replace every occurrence of the following with generic placeholders:
 %s
-Replacement rules:
-- Domain names → "example.com" or "internal.example.com"
-- IP addresses → "10.0.0.1"
-- Real names → "User", "Employee"
-- Email addresses → "user@example.com"
-- API keys, tokens, passwords → "<REDACTED>"
-- Project IDs, internal identifiers → "<PROJECT_ID>"
-- Company-specific header names → "X-Custom-Header"
-- Internal URLs → "https://internal.example.com/..."
+Everything that match any of this rules should be replaced with <REDACTED>
 
-STEP 5 — Formulate a clear, concise question.
+Formulate a clear, concise question.
 
 CRITICAL: The output MUST NOT contain any real corporate names, domains, credentials, or identifiers. If in doubt, replace it.
 
