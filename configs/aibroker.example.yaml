@@ -25,11 +25,23 @@ broker:
     headers:
       # Same as upstream if using the same endpoint
 
-  # Escalation mode: "stub" writes to files, "live" calls external model
+  # Escalation: stub | live (OpenAI-compatible POST …/v1/chat/completions) | cursor_agents
+  # Cursor Cloud Agents API — NOT chat completions; spec:
+  # https://cursor.com/docs-static/cloud-agents-openapi.yaml
+  # Requires GitHub repo; async agent run; use for repo-wide tasks, not 1:1 chat parity.
   escalation_mode: stub
   stub_dir: escalation_dumps
 
-  # External model — escalation target (used when escalation_mode: live)
+  # escalation_mode: cursor_agents
+  # cursor_agents:
+  #   api_key: "${CURSOR_API_KEY}"
+  #   repository: "https://github.com/your-org/your-repo"
+  #   ref: "main"
+  #   model: "default"
+  #   poll_interval: 5s
+  #   max_wait: 15m
+
+  # External model — used when escalation_mode: live (OpenAI-compatible URL)
   escalation:
     url: "https://api.openai.com"
     model: "gpt-4o"
