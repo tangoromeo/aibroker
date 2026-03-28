@@ -39,3 +39,6 @@ escalation_dumps/
 aibroker
 .DS_Store
 sync.ffs_db
+
+# Config with real credentials — only example goes to repo
+configs/aibroker.yaml

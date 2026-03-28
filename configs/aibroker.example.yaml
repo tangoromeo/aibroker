@@ -4,10 +4,9 @@ listen: ":8080"
 # Primary upstream — local/corporate model (Kilo talks to this)
 upstream:
   url: "http://your-llm-endpoint"
-  api_key: ""
+  api_key: "${UPSTREAM_API_KEY}"
   timeout: 5m
-  headers:
-    ContinueDevProject: ""
+  headers: {}
   tls:
     insecure: false
 
@@ -18,11 +17,10 @@ broker:
   # Screening LLM — evaluates security policies (can be the same endpoint)
   screening:
     url: "http://your-llm-endpoint"
-    model: "Qwen/Qwen3-Coder-30B-A3B-Instruct"
-    api_key: "${UPSTREAM_API_KEY}=="
+    model: "your-screening-model"
+    api_key: "${SCREENING_API_KEY}"
     timeout: 60s
-    headers:
-      ContinueDevProject: "${PROJECT_ID}"
+    headers: {}
 
   # Escalation mode: "stub" writes to files, "live" calls external model
   escalation_mode: stub
@@ -32,7 +30,7 @@ broker:
   escalation:
     url: "https://api.openai.com"
     model: "gpt-4o"
-    api_key: "sk-REPLACE_ME"
+    api_key: "${ESCALATION_API_KEY}"
     timeout: 2m
 
   # Security policies — each evaluated by the screening LLM
