@@ -17,17 +17,22 @@ type PolicyConfig struct {
 	Rules       string `yaml:"rules"`
 }
 
-const screeningPromptTemplate = `Task: one JSON object only. No markdown, no text before/after JSON.
+const screeningPromptTemplate = `Return one JSON object only. No markdown.
 
 Policy: %s
 
-Rules (flag violation only if REAL sensitive data appears, not placeholders):
+Rules (real violations only):
 %s
 
-NOT violations — always use verdict "clean" if content has ONLY these:
-- Placeholders: <REDACTED>, <PROJECT_ID>, example.com, user@example.com
-- Env refs: ${ANYTHING}
-- Generic names: User, Employee, internal.example.com
+NEVER count as violation (verdict MUST be "clean" if these are the only "issues"):
+- Already-redacted text: <REDACTED>, <OBJECT_ID>, <PROJECT_ID>, <NUMERIC_ID>, <TEST_CARD_DOC_EXAMPLE>, <COPYRIGHT_HOLDER>
+- Env syntax: ${VAR}
+- example.com / example.org / user@example.com
+- Names or years in Copyright / LICENSE / SPDX / "Author:" boilerplate lines
+- Test card number 1234 5678 9012 3456 (documentation example, not a real card)
+- A bare long number without @ is NOT an email address
+
+Do NOT invent findings. If unsure, verdict "clean".
 
 Output exactly:
 {"verdict":"clean","confidence":0.95,"findings":[]}
@@ -51,6 +56,7 @@ func (e *LLMPolicyEngine) Evaluate(ctx context.Context, req *ChatRequest) (*Perm
 	if content == "" {
 		return &Permission{Allowed: true, Reason: "no content to screen"}, nil
 	}
+	content = normalizeForScreening(content)
 	if len(content) > 8000 {
 		content = content[:8000] + "\n...(truncated)"
 	}
