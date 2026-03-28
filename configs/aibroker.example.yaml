@@ -6,7 +6,9 @@ upstream:
   url: "http://your-llm-endpoint"
   api_key: "${UPSTREAM_API_KEY}"
   timeout: 5m
-  headers: {}
+  headers:
+    # Custom headers passed to upstream (e.g. project ID, auth tokens)
+    # MyProjectHeader: "project-id-here"
   tls:
     insecure: false
 
@@ -20,7 +22,8 @@ broker:
     model: "your-screening-model"
     api_key: "${SCREENING_API_KEY}"
     timeout: 60s
-    headers: {}
+    headers:
+      # Same as upstream if using the same endpoint
 
   # Escalation mode: "stub" writes to files, "live" calls external model
   escalation_mode: stub
