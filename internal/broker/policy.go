@@ -17,18 +17,22 @@ type PolicyConfig struct {
 	Rules       string `yaml:"rules"`
 }
 
-const screeningPromptTemplate = `You are a security auditor. Analyze the content below for violations of this policy:
+const screeningPromptTemplate = `Task: one JSON object only. No markdown, no text before/after JSON.
 
-POLICY: %s
-RULES:
+Policy: %s
+
+Rules (flag violation only if REAL sensitive data appears, not placeholders):
 %s
 
-Check EVERY rule. If ANY rule is violated, verdict MUST be "violation".
+NOT violations — always use verdict "clean" if content has ONLY these:
+- Placeholders: <REDACTED>, <PROJECT_ID>, example.com, user@example.com
+- Env refs: ${ANYTHING}
+- Generic names: User, Employee, internal.example.com
 
-Respond ONLY with this JSON (no markdown, no explanation, no other text):
-{"verdict": "clean", "confidence": 0.95, "findings": []}
+Output exactly:
+{"verdict":"clean","confidence":0.95,"findings":[]}
 or
-{"verdict": "violation", "confidence": 0.9, "findings": ["specific finding 1", "specific finding 2"]}
+{"verdict":"violation","confidence":0.9,"findings":["short reason"]}
 `
 
 // LLMPolicyEngine evaluates content against policies using a local LLM.

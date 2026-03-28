@@ -2,12 +2,14 @@ package httpproxy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 )
 
@@ -28,6 +30,20 @@ func RequestDump(dir string, logger *slog.Logger) Middleware {
 				logger.Error("dump request", "err", err)
 			} else {
 				logger.Info("request dumped", "path", reqPath, "bytes", len(req.BodyRaw))
+			}
+
+			meta := dumpMeta{
+				Seq:       n,
+				Path:      req.HTTP.URL.Path,
+				Method:    req.HTTP.Method,
+				Model:     req.Model,
+				Stream:    req.Stream,
+				BodyBytes: len(req.BodyRaw),
+				// Broker shape/screen/forward only run for chat completions.
+				BrokerEscalationPipeline: strings.HasSuffix(req.HTTP.URL.Path, "/chat/completions"),
+			}
+			if b, err := json.MarshalIndent(meta, "", "  "); err == nil {
+				_ = os.WriteFile(filepath.Join(dir, fmt.Sprintf("request_%d.meta.json", n)), b, 0o644)
 			}
 
 			resp, err := next(ctx, req)
@@ -64,4 +80,16 @@ type teeReadCloser struct {
 
 func (t *teeReadCloser) Close() error {
 	return t.closeFn()
+}
+
+// dumpMeta explains what was captured; BrokerEscalationPipeline=false means
+// shape/screen/forward skipped this request (not a chat completion).
+type dumpMeta struct {
+	Seq                      int64  `json:"seq"`
+	Path                     string `json:"path"`
+	Method                   string `json:"method"`
+	Model                    string `json:"model,omitempty"`
+	Stream                   bool   `json:"stream"`
+	BodyBytes                int    `json:"body_bytes"`
+	BrokerEscalationPipeline bool   `json:"broker_escalation_pipeline"`
 }

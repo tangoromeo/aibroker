@@ -145,6 +145,15 @@ func ShapeMiddleware(shaper ContextShaper, targetModel string, dumpDir string, l
 				if err := os.WriteFile(path, shaped.Body, 0o644); err == nil {
 					logger.Info("shaped body dumped", "path", path)
 				}
+				meta := map[string]any{
+					"seq":    n,
+					"path":   req.HTTP.URL.Path,
+					"note":   "shaped body sent to screening; only produced for /chat/completions",
+					"summary": truncStr(shaped.Summary, 200),
+				}
+				if b, err := json.MarshalIndent(meta, "", "  "); err == nil {
+					_ = os.WriteFile(filepath.Join(dumpDir, fmt.Sprintf("shaped_%d.meta.json", n)), b, 0o644)
+				}
 			}
 
 			return next(ctx, req)

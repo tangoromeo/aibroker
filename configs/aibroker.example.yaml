@@ -90,6 +90,8 @@ log:
   level: debug
   format: text
 
+# Dumps: request_N.json + request_N.meta.json — meta shows path; broker_escalation_pipeline
+# is true only for POST /v1/chat/completions (Kilo also hits /v1/models etc. — those bypass broker).
 pipeline:
   - middleware: logging
   - middleware: tool_adapter
