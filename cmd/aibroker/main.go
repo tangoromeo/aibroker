@@ -70,15 +70,6 @@ func runHTTP(ctx context.Context, cfg *config.Config, logger *slog.Logger) {
 			},
 			MinFailures:     cfg.Broker.MinFailures,
 			ForceEscalation: cfg.Broker.ForceEscalation,
-			CursorAgents: broker.CursorAgentsConfig{
-				BaseURL:      cfg.Broker.CursorAgents.BaseURL,
-				APIKey:       cfg.Broker.CursorAgents.APIKey,
-				Repository:   cfg.Broker.CursorAgents.Repository,
-				Ref:          cfg.Broker.CursorAgents.Ref,
-				Model:        cfg.Broker.CursorAgents.Model,
-				PollInterval: cfg.Broker.CursorAgents.PollInterval,
-				MaxWait:      cfg.Broker.CursorAgents.MaxWait,
-			},
 		}
 		for _, pd := range cfg.Broker.Policies {
 			brokerCfg.Policies = append(brokerCfg.Policies, broker.PolicyConfig{

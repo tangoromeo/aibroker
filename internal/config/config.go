@@ -24,23 +24,9 @@ type BrokerConfig struct {
 	ForceEscalation bool              `yaml:"force_escalation"`
 	Screening       LLMEndpointConfig `yaml:"screening"`
 	Escalation      LLMEndpointConfig `yaml:"escalation"`
-	// EscalationMode: stub | live (OpenAI-compatible URL) | cursor_agents (Cursor Cloud Agents API)
-	EscalationMode  string               `yaml:"escalation_mode"`
-	StubDir         string               `yaml:"stub_dir"`
-	CursorAgents    CursorAgentsYAML     `yaml:"cursor_agents"`
-	Policies        []PolicyDef          `yaml:"policies"`
-}
-
-// CursorAgentsYAML matches broker.CursorAgentsConfig (YAML in configs/).
-// Spec: https://cursor.com/docs-static/cloud-agents-openapi.yaml
-type CursorAgentsYAML struct {
-	BaseURL      string        `yaml:"base_url"`
-	APIKey       string        `yaml:"api_key"`
-	Repository   string        `yaml:"repository"`
-	Ref          string        `yaml:"ref"`
-	Model        string        `yaml:"model"`
-	PollInterval time.Duration `yaml:"poll_interval"`
-	MaxWait      time.Duration `yaml:"max_wait"`
+	EscalationMode  string            `yaml:"escalation_mode"` // "stub" or "live"
+	StubDir         string            `yaml:"stub_dir"`
+	Policies        []PolicyDef       `yaml:"policies"`
 }
 
 type LLMEndpointConfig struct {
@@ -131,12 +117,6 @@ func applyDefaults(cfg *Config) {
 		}
 		if cfg.Broker.Escalation.Timeout == 0 {
 			cfg.Broker.Escalation.Timeout = 2 * time.Minute
-		}
-		if cfg.Broker.CursorAgents.PollInterval == 0 {
-			cfg.Broker.CursorAgents.PollInterval = 5 * time.Second
-		}
-		if cfg.Broker.CursorAgents.MaxWait == 0 {
-			cfg.Broker.CursorAgents.MaxWait = 15 * time.Minute
 		}
 	}
 }

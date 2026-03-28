@@ -13,11 +13,10 @@ import (
 )
 
 type Config struct {
-	ScreeningLLM    LLMEndpoint         `yaml:"screening"`
-	ExternalLLM     LLMEndpoint         `yaml:"escalation"`
-	CursorAgents    CursorAgentsConfig  `yaml:"cursor_agents"`
-	Policies        []PolicyConfig      `yaml:"policies"`
-	MinFailures     int                 `yaml:"min_failures"`
+	ScreeningLLM    LLMEndpoint    `yaml:"screening"`
+	ExternalLLM     LLMEndpoint    `yaml:"escalation"`
+	Policies        []PolicyConfig `yaml:"policies"`
+	MinFailures     int            `yaml:"min_failures"`
 	ForceEscalation bool
 	EscalationMode  string
 	StubDir         string
@@ -35,16 +34,13 @@ func Build(cfg Config, logger *slog.Logger) *Registry {
 	screenClient := NewLLMClient(cfg.ScreeningLLM, log)
 
 	var esc Escalator
-	switch cfg.EscalationMode {
-	case "stub":
+	if cfg.EscalationMode == "stub" {
 		dir := cfg.StubDir
 		if dir == "" {
 			dir = "escalation_dumps"
 		}
 		esc = NewStubEscalator(dir, log)
-	case "cursor_agents":
-		esc = NewCursorAgentsEscalator(cfg.CursorAgents, log)
-	default:
+	} else {
 		esc = NewLLMClient(cfg.ExternalLLM, log)
 	}
 
@@ -59,17 +55,12 @@ func Build(cfg Config, logger *slog.Logger) *Registry {
 	shaper := NewLLMContextShaper(screenClient, cfg.Policies, log)
 	validator := NewBasicValidator()
 
-	escalationModel := cfg.ExternalLLM.Model
-	if cfg.EscalationMode == "cursor_agents" && cfg.CursorAgents.Model != "" {
-		escalationModel = cfg.CursorAgents.Model
-	}
-
 	return &Registry{
 		mw: map[string]httpproxy.Middleware{
 			"escalation_detect":  DetectMiddleware(detector, log),
 			"escalation_screen":  ScreenMiddleware(policy, log),
-			"escalation_shape":   ShapeMiddleware(shaper, escalationModel, cfg.StubDir, log),
-			"escalation_forward": ForwardMiddleware(esc, validator, escalationModel, log),
+			"escalation_shape":   ShapeMiddleware(shaper, cfg.ExternalLLM.Model, cfg.StubDir, log),
+			"escalation_forward": ForwardMiddleware(esc, validator, cfg.ExternalLLM.Model, log),
 		},
 	}
 }
