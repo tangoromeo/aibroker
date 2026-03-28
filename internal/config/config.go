@@ -13,24 +13,50 @@ type Config struct {
 	Mode     string         `yaml:"mode"` // "http" or "stdio"
 	Listen   string         `yaml:"listen"`
 	Upstream UpstreamConfig `yaml:"upstream"`
+	Broker   *BrokerConfig  `yaml:"broker"`
 	Agent    AgentConfig    `yaml:"agent"`
 	Pipeline []StageConfig  `yaml:"pipeline"`
 	Log      LogConfig      `yaml:"log"`
 }
 
+type BrokerConfig struct {
+	MinFailures    int               `yaml:"min_failures"`
+	Screening      LLMEndpointConfig `yaml:"screening"`
+	Escalation     LLMEndpointConfig `yaml:"escalation"`
+	EscalationMode string            `yaml:"escalation_mode"` // "stub" or "live"
+	StubDir        string            `yaml:"stub_dir"`
+	Policies       []PolicyDef       `yaml:"policies"`
+}
+
+type LLMEndpointConfig struct {
+	URL     string            `yaml:"url"`
+	Model   string            `yaml:"model"`
+	APIKey  string            `yaml:"api_key"`
+	Timeout time.Duration     `yaml:"timeout"`
+	Headers map[string]string `yaml:"headers"`
+}
+
+type PolicyDef struct {
+	Name        string `yaml:"name"`
+	Severity    string `yaml:"severity"`
+	Action      string `yaml:"action"`
+	Description string `yaml:"description"`
+	Prompt      string `yaml:"prompt"`
+}
+
 type UpstreamConfig struct {
-	URL       string            `yaml:"url"`
-	APIKey    string            `yaml:"api_key"`
-	Timeout   time.Duration     `yaml:"timeout"`
-	TLS       TLSConfig         `yaml:"tls"`
-	Headers   map[string]string `yaml:"headers"`
+	URL     string            `yaml:"url"`
+	APIKey  string            `yaml:"api_key"`
+	Timeout time.Duration     `yaml:"timeout"`
+	TLS     TLSConfig         `yaml:"tls"`
+	Headers map[string]string `yaml:"headers"`
 }
 
 type TLSConfig struct {
-	Insecure     bool   `yaml:"insecure"`       // skip TLS verification (testing only)
-	CACert       string `yaml:"ca_cert"`         // path to custom CA certificate
-	ClientCert   string `yaml:"client_cert"`     // path to client certificate
-	ClientKey    string `yaml:"client_key"`      // path to client certificate key
+	Insecure   bool   `yaml:"insecure"`    // skip TLS verification (testing only)
+	CACert     string `yaml:"ca_cert"`     // path to custom CA certificate
+	ClientCert string `yaml:"client_cert"` // path to client certificate
+	ClientKey  string `yaml:"client_key"`  // path to client certificate key
 }
 
 type AgentConfig struct {
@@ -77,6 +103,17 @@ func applyDefaults(cfg *Config) {
 	cfg.Log.Format = strings.ToLower(cfg.Log.Format)
 	if cfg.Upstream.Timeout == 0 {
 		cfg.Upstream.Timeout = 5 * time.Minute
+	}
+	if cfg.Broker != nil {
+		if cfg.Broker.MinFailures <= 0 {
+			cfg.Broker.MinFailures = 3
+		}
+		if cfg.Broker.Screening.Timeout == 0 {
+			cfg.Broker.Screening.Timeout = 60 * time.Second
+		}
+		if cfg.Broker.Escalation.Timeout == 0 {
+			cfg.Broker.Escalation.Timeout = 2 * time.Minute
+		}
 	}
 }
 

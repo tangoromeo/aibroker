@@ -1,0 +1,25 @@
+mode: http
+listen: ":8080"
+
+upstream:
+  url: "http://your-llm-endpoint"
+  api_key: ""
+  timeout: 5m
+
+  headers:
+    ContinueDevProject: ""
+
+  tls:
+    insecure: false
+
+log:
+  level: debug
+  format: text
+
+pipeline:
+  - name: logging
+    middleware: logging
+  - name: dump
+    middleware: dump
+    config:
+      dir: dumps

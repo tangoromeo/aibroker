@@ -1,25 +1,110 @@
 mode: http
 listen: ":8080"
 
+# Primary upstream — local/corporate model (Kilo talks to this)
 upstream:
   url: "http://your-llm-endpoint"
-  api_key: ""
+  api_key: "${UPSTREAM_API_KEY}=="
   timeout: 5m
-
   headers:
-    ContinueDevProject: ""
-
+    ContinueDevProject: "${PROJECT_ID}"
   tls:
     insecure: false
 
+# Broker: screening + escalation orchestration
+broker:
+  min_failures: 3  # how many failures before escalation triggers
+
+  # Screening LLM — evaluates security policies (can be the same endpoint)
+  screening:
+    url: "http://your-llm-endpoint"
+    model: "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+    api_key: "${UPSTREAM_API_KEY}=="
+    timeout: 60s
+    headers:
+      ContinueDevProject: "${PROJECT_ID}"
+
+  # Escalation mode: "stub" writes to files, "live" calls external model
+  escalation_mode: stub
+  stub_dir: escalation_dumps
+
+  # External model — escalation target (used when escalation_mode: live)
+  escalation:
+    url: "https://api.openai.com"
+    model: "gpt-4o"
+    api_key: "sk-REPLACE_ME"
+    timeout: 2m
+
+  # Security policies — each evaluated by the screening LLM
+  policies:
+    - name: secrets
+      severity: critical
+      action: block
+      description: "Detect hardcoded secrets and credentials"
+      prompt: |
+        You are a security auditor. Analyze the code below for hardcoded
+        secrets: API keys, passwords, tokens, database connection strings,
+        private keys, or any credentials.
+
+        Respond ONLY with JSON (no markdown):
+        {"verdict": "clean", "confidence": 0.95, "findings": []}
+        or
+        {"verdict": "violation", "confidence": 0.9, "findings": ["AWS key found in line 15"]}
+
+    - name: pii
+      severity: high
+      action: block
+      description: "Detect personally identifiable information"
+      prompt: |
+        You are a privacy auditor. Check if the code contains personally
+        identifiable information (PII): real names, emails, phone numbers,
+        physical addresses, SSNs, passport numbers.
+
+        Respond ONLY with JSON (no markdown):
+        {"verdict": "clean", "confidence": 0.95, "findings": []}
+        or
+        {"verdict": "violation", "confidence": 0.9, "findings": ["Email found"]}
+
+    - name: corporate-identity
+      severity: high
+      action: block
+      description: "Detect corporate identity leaks"
+      prompt: |
+        You are a corporate information auditor. Check if the code or
+        comments contain corporate identity markers that should not
+        be shared externally:
+        - Internal domain names (e.g. *.corp, *.internal, *.local, company-specific domains)
+        - Internal hostnames, service names, or infrastructure naming conventions
+        - Corporate name, its derivatives and abbreviations
+        - Corporate email addresses
+        - Employee names, team names, department names
+        - Internal project codenames
+        - Internal URLs, Jira/Confluence links, wiki references
+        - Internal IP ranges, VPN endpoints
+        - Company-specific configuration keys or environment variable names
+        - References to internal systems, tools, or platforms by name
+
+        Respond ONLY with JSON (no markdown):
+        {"verdict": "clean", "confidence": 0.95, "findings": []}
+        or
+        {"verdict": "violation", "confidence": 0.9, "findings": ["Internal domain corp.example.com found", "Employee name in comment"]}
+
+    # BACKLOG: proprietary code detection needs a custom embedder
+    # trained on the corporate codebase, not a single prompt.
+    # - name: proprietary
+    #   severity: medium
+    #   action: warn
+    #   prompt: "..."
+
 log:
-  level: info
+  level: debug
   format: text
 
 pipeline:
-  - name: logging
-    middleware: logging
-  - name: dump
-    middleware: dump
-    config:
-      dir: dumps
+  - middleware: logging
+  - middleware: dump
+  - middleware: tool_adapter
+  - middleware: escalation_detect
+  - middleware: escalation_shape
+  - middleware: escalation_screen
+  - middleware: escalation_forward

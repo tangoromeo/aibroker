@@ -15,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 
+	"aibroker/internal/broker"
 	"aibroker/internal/config"
 	"aibroker/internal/httpproxy"
 	mw "aibroker/internal/middleware"
@@ -47,6 +48,45 @@ func main() {
 }
 
 func runHTTP(ctx context.Context, cfg *config.Config, logger *slog.Logger) {
+	// Build broker registry once — individual steps are resolved by name in the pipeline.
+	var brokerReg *broker.Registry
+	if cfg.Broker != nil {
+		brokerCfg := broker.Config{
+			EscalationMode: cfg.Broker.EscalationMode,
+			StubDir:        cfg.Broker.StubDir,
+			ScreeningLLM: broker.LLMEndpoint{
+				URL:     cfg.Broker.Screening.URL,
+				Model:   cfg.Broker.Screening.Model,
+				APIKey:  cfg.Broker.Screening.APIKey,
+				Timeout: cfg.Broker.Screening.Timeout,
+				Headers: cfg.Broker.Screening.Headers,
+			},
+			ExternalLLM: broker.LLMEndpoint{
+				URL:     cfg.Broker.Escalation.URL,
+				Model:   cfg.Broker.Escalation.Model,
+				APIKey:  cfg.Broker.Escalation.APIKey,
+				Timeout: cfg.Broker.Escalation.Timeout,
+				Headers: cfg.Broker.Escalation.Headers,
+			},
+			MinFailures: cfg.Broker.MinFailures,
+		}
+		for _, pd := range cfg.Broker.Policies {
+			brokerCfg.Policies = append(brokerCfg.Policies, broker.PolicyConfig{
+				Name:        pd.Name,
+				Severity:    pd.Severity,
+				Action:      pd.Action,
+				Description: pd.Description,
+				Prompt:      pd.Prompt,
+			})
+		}
+		brokerReg = broker.Build(brokerCfg, logger)
+		logger.Info("broker registered",
+			"steps", brokerReg.Names(),
+			"escalation_mode", cfg.Broker.EscalationMode,
+			"policies", len(cfg.Broker.Policies),
+		)
+	}
+
 	var mws []httpproxy.Middleware
 	for _, stage := range cfg.Pipeline {
 		switch stage.Middleware {
@@ -58,6 +98,8 @@ func runHTTP(ctx context.Context, cfg *config.Config, logger *slog.Logger) {
 				dir = v
 			}
 			mws = append(mws, httpproxy.RequestDump(dir, logger))
+		case "tool_adapter":
+			mws = append(mws, httpproxy.ToolAdapter(logger))
 		case "context_trim":
 			trimCfg := httpproxy.ContextTrimConfig{}
 			if v, ok := stage.Config["max_tokens"].(int); ok {
@@ -71,8 +113,14 @@ func runHTTP(ctx context.Context, cfg *config.Config, logger *slog.Logger) {
 			}
 			mws = append(mws, httpproxy.ContextTrim(trimCfg, logger))
 		default:
-			logger.Error("unknown middleware", "name", stage.Middleware)
-			os.Exit(1)
+			// Try broker registry (escalation_detect, escalation_screen, etc.)
+			if m := brokerReg.Get(stage.Middleware); m != nil {
+				mws = append(mws, m)
+				logger.Info("pipeline: added broker step", "name", stage.Middleware)
+			} else {
+				logger.Error("unknown middleware", "name", stage.Middleware)
+				os.Exit(1)
+			}
 		}
 	}
 
