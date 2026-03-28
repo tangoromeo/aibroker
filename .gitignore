@@ -33,8 +33,9 @@ go.work.sum
 .idea/
 .vscode/
 
-#other
+# Runtime artifacts
 dumps/
 escalation_dumps/
-
 aibroker
+.DS_Store
+sync.ffs_db

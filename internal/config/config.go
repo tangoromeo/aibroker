@@ -45,18 +45,18 @@ type PolicyDef struct {
 }
 
 type UpstreamConfig struct {
-	URL     string            `yaml:"url"`
-	APIKey  string            `yaml:"api_key"`
-	Timeout time.Duration     `yaml:"timeout"`
-	TLS     TLSConfig         `yaml:"tls"`
-	Headers map[string]string `yaml:"headers"`
+	URL       string            `yaml:"url"`
+	APIKey    string            `yaml:"api_key"`
+	Timeout   time.Duration     `yaml:"timeout"`
+	TLS       TLSConfig         `yaml:"tls"`
+	Headers   map[string]string `yaml:"headers"`
 }
 
 type TLSConfig struct {
-	Insecure   bool   `yaml:"insecure"`    // skip TLS verification (testing only)
-	CACert     string `yaml:"ca_cert"`     // path to custom CA certificate
-	ClientCert string `yaml:"client_cert"` // path to client certificate
-	ClientKey  string `yaml:"client_key"`  // path to client certificate key
+	Insecure     bool   `yaml:"insecure"`       // skip TLS verification (testing only)
+	CACert       string `yaml:"ca_cert"`         // path to custom CA certificate
+	ClientCert   string `yaml:"client_cert"`     // path to client certificate
+	ClientKey    string `yaml:"client_key"`      // path to client certificate key
 }
 
 type AgentConfig struct {

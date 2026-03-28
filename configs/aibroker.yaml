@@ -102,8 +102,8 @@ log:
 
 pipeline:
   - middleware: logging
-  - middleware: dump
   - middleware: tool_adapter
+  - middleware: dump
   - middleware: escalation_detect
   - middleware: escalation_shape
   - middleware: escalation_screen

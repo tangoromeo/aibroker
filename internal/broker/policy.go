@@ -121,9 +121,9 @@ func extractContent(req *ChatRequest) string {
 
 // Verdict is the expected JSON structure from the screening LLM.
 type Verdict struct {
-	Verdict    string   `json:"verdict"`
+	Verdict  string   `json:"verdict"`
 	Confidence float64  `json:"confidence"`
-	Findings   []string `json:"findings"`
+	Findings []string `json:"findings"`
 }
 
 func parseVerdict(raw string) (*Verdict, error) {

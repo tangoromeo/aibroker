@@ -22,27 +22,22 @@ func ToolAdapter(logger *slog.Logger) Middleware {
 				return next(ctx, req)
 			}
 
-			var body map[string]json.RawMessage
+			var body map[string]any
 			if err := json.Unmarshal(req.BodyRaw, &body); err != nil {
 				return next(ctx, req)
 			}
 
-			rawTools, ok := body["tools"]
-			if !ok {
-				return next(ctx, req)
-			}
-
-			var tools []any
-			if err := json.Unmarshal(rawTools, &tools); err != nil || len(tools) == 0 {
+			rawTools, _ := body["tools"].([]any)
+			if len(rawTools) == 0 {
 				return next(ctx, req)
 			}
 
 			// Store originals before modification.
-			origSchemas := buildOrigSchemas(tools)
+			origSchemas := buildOrigSchemas(rawTools)
 
 			// Simplify each tool definition.
 			simplified := 0
-			for i, tool := range tools {
+			for i, tool := range rawTools {
 				t, ok := tool.(map[string]any)
 				if !ok {
 					continue
@@ -54,17 +49,27 @@ func ToolAdapter(logger *slog.Logger) Middleware {
 				delete(fn, "strict")
 				if params, ok := fn["parameters"].(map[string]any); ok {
 					simplifySchema(params)
+					example := generateExample(params)
+					if example != "" {
+						desc, _ := fn["description"].(string)
+						fn["description"] = desc + "\n\nREQUIRED ARGUMENTS FORMAT: " + example
+					}
 					simplified++
 				}
-				tools[i] = t
+				rawTools[i] = t
+			}
+			body["tools"] = rawTools
+
+			// Strip broken tool_call/tool-response pairs from history.
+			// Models repeat the empty-args pattern when they see it in history.
+			if messages, ok := body["messages"].([]any); ok {
+				cleaned, stripped := stripBrokenToolCalls(messages, logger)
+				if stripped > 0 {
+					body["messages"] = cleaned
+					logger.Info("tool_adapter: stripped broken tool pairs", "count", stripped)
+				}
 			}
 
-			if simplified == 0 {
-				return next(ctx, req)
-			}
-
-			newToolsJSON, _ := json.Marshal(tools)
-			body["tools"] = newToolsJSON
 			newBody, _ := json.Marshal(body)
 			req.BodyRaw = newBody
 
@@ -134,6 +139,136 @@ func simplifySchema(schema map[string]any) {
 		}
 		schema["required"] = kept
 	}
+}
+
+// stripBrokenToolCalls removes assistant messages that contain tool_calls with
+// empty arguments, plus the corresponding tool-response messages. This prevents
+// the model from learning the "call with {}" pattern from its own history.
+func stripBrokenToolCalls(messages []any, logger *slog.Logger) ([]any, int) {
+	// First pass: find tool_call IDs with empty/missing arguments.
+	badIDs := map[string]bool{}
+	for _, msg := range messages {
+		m, ok := msg.(map[string]any)
+		if !ok || m["role"] != "assistant" {
+			continue
+		}
+		toolCalls, ok := m["tool_calls"].([]any)
+		if !ok {
+			continue
+		}
+		for _, tc := range toolCalls {
+			tcMap, ok := tc.(map[string]any)
+			if !ok {
+				continue
+			}
+			fn, ok := tcMap["function"].(map[string]any)
+			if !ok {
+				continue
+			}
+			args, _ := fn["arguments"].(string)
+			args = strings.TrimSpace(args)
+			if args == "" || args == "{}" || args == "null" {
+				if id, ok := tcMap["id"].(string); ok {
+					badIDs[id] = true
+				}
+			}
+		}
+	}
+
+	if len(badIDs) == 0 {
+		return messages, 0
+	}
+
+	// Second pass: filter out bad assistant messages and their tool responses.
+	stripped := 0
+	var result []any
+	for _, msg := range messages {
+		m, ok := msg.(map[string]any)
+		if !ok {
+			result = append(result, msg)
+			continue
+		}
+		role, _ := m["role"].(string)
+
+		if role == "tool" {
+			tcID, _ := m["tool_call_id"].(string)
+			if badIDs[tcID] {
+				stripped++
+				continue
+			}
+		}
+
+		if role == "assistant" {
+			if toolCalls, ok := m["tool_calls"].([]any); ok {
+				allBad := true
+				for _, tc := range toolCalls {
+					tcMap, ok := tc.(map[string]any)
+					if !ok {
+						continue
+					}
+					id, _ := tcMap["id"].(string)
+					if !badIDs[id] {
+						allBad = false
+						break
+					}
+				}
+				if allBad {
+					stripped++
+					continue
+				}
+			}
+		}
+
+		// Strip assistant text from escalation stubs that Kilo can't handle.
+		if role == "assistant" {
+			if _, hasTc := m["tool_calls"]; !hasTc {
+				content := messageText(m)
+				if strings.Contains(content, "[AIBroker stub]") ||
+					strings.Contains(content, "[AIBroker]") {
+					stripped++
+					continue
+				}
+			}
+		}
+
+		// Strip Kilo retry error messages that clutter history.
+		if role == "user" {
+			content := messageText(m)
+			if strings.Contains(content, "without value for required parameter") ||
+				strings.Contains(content, "did not provide a value for the required") ||
+				strings.Contains(content, "[ERROR] You did not use a tool") {
+				stripped++
+				continue
+			}
+		}
+
+		result = append(result, msg)
+	}
+
+	return result, stripped
+}
+
+// messageText extracts text from a message's content field.
+// Handles both string content and array-of-parts (Kilo format).
+func messageText(m map[string]any) string {
+	switch c := m["content"].(type) {
+	case string:
+		return c
+	case []any:
+		var sb strings.Builder
+		for _, part := range c {
+			p, ok := part.(map[string]any)
+			if !ok {
+				continue
+			}
+			if t, ok := p["text"].(string); ok {
+				sb.WriteString(t)
+				sb.WriteByte(' ')
+			}
+		}
+		return sb.String()
+	}
+	return ""
 }
 
 // --- original schema tracking ---
@@ -348,4 +483,70 @@ func toStringSlice(v any) []string {
 		}
 	}
 	return out
+}
+
+// generateExample builds a concrete JSON example from a tool's parameter schema.
+func generateExample(params map[string]any) string {
+	obj := exampleObject(params)
+	if len(obj) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(obj)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+func exampleObject(schema map[string]any) map[string]any {
+	props, _ := schema["properties"].(map[string]any)
+	if len(props) == 0 {
+		return nil
+	}
+	result := make(map[string]any, len(props))
+	for name, prop := range props {
+		p, ok := prop.(map[string]any)
+		if !ok {
+			continue
+		}
+		result[name] = exampleValue(p)
+	}
+	return result
+}
+
+func exampleValue(prop map[string]any) any {
+	typ, _ := prop["type"].(string)
+	desc, _ := prop["description"].(string)
+	descLower := strings.ToLower(desc)
+
+	switch typ {
+	case "string":
+		if enums, ok := prop["enum"].([]any); ok && len(enums) > 0 {
+			return enums[0]
+		}
+		if strings.Contains(descLower, "path") || strings.Contains(descLower, "file") || strings.Contains(descLower, "directory") {
+			return "src/main.go"
+		}
+		if strings.Contains(descLower, "regex") || strings.Contains(descLower, "pattern") {
+			return "TODO"
+		}
+		if strings.Contains(descLower, "mode") || strings.Contains(descLower, "slug") {
+			return "code"
+		}
+		return "example value"
+	case "boolean":
+		return true
+	case "integer", "number":
+		return 1
+	case "array":
+		items, ok := prop["items"].(map[string]any)
+		if !ok {
+			return []any{}
+		}
+		return []any{exampleValue(items)}
+	case "object":
+		return exampleObject(prop)
+	default:
+		return nil
+	}
 }
