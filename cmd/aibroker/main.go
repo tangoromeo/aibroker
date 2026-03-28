@@ -77,7 +77,7 @@ func runHTTP(ctx context.Context, cfg *config.Config, logger *slog.Logger) {
 				Severity:    pd.Severity,
 				Action:      pd.Action,
 				Description: pd.Description,
-				Prompt:      pd.Prompt,
+				Rules:       pd.Rules,
 			})
 		}
 		brokerReg = broker.Build(brokerCfg, logger)

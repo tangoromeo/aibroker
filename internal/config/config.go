@@ -42,7 +42,7 @@ type PolicyDef struct {
 	Severity    string `yaml:"severity"`
 	Action      string `yaml:"action"`
 	Description string `yaml:"description"`
-	Prompt      string `yaml:"prompt"`
+	Rules       string `yaml:"rules"`
 }
 
 type UpstreamConfig struct {

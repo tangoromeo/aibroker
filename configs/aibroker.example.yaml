@@ -36,66 +36,55 @@ broker:
     api_key: "${ESCALATION_API_KEY}"
     timeout: 2m
 
-  # Security policies — each evaluated by the screening LLM
+  # Security policies — rules are shared between shaper (anonymize) and screener (detect).
+  # Shaper uses rules to know WHAT to strip; screener uses rules to know WHAT to flag.
   policies:
     - name: secrets
       severity: critical
       action: block
       description: "Detect hardcoded secrets and credentials"
-      prompt: |
-        You are a security auditor. Analyze the code below for hardcoded
-        secrets: API keys, passwords, tokens, database connection strings,
-        private keys, or any credentials.
-
-        Respond ONLY with JSON (no markdown):
-        {"verdict": "clean", "confidence": 0.95, "findings": []}
-        or
-        {"verdict": "violation", "confidence": 0.9, "findings": ["AWS key found in line 15"]}
+      rules: |
+        - API keys, access tokens, bearer tokens
+        - Passwords, passphrases, secret phrases
+        - Database connection strings with credentials
+        - Private keys, certificates, PEM blocks
+        - AWS/GCP/Azure access keys and secrets
+        - OAuth client secrets
+        - Any string that looks like a credential (base64-encoded, high-entropy)
 
     - name: pii
       severity: high
       action: block
       description: "Detect personally identifiable information"
-      prompt: |
-        You are a privacy auditor. Check if the code contains personally
-        identifiable information (PII): real names, emails, phone numbers,
-        physical addresses, SSNs, passport numbers.
-
-        Respond ONLY with JSON (no markdown):
-        {"verdict": "clean", "confidence": 0.95, "findings": []}
-        or
-        {"verdict": "violation", "confidence": 0.9, "findings": ["Email found"]}
+      rules: |
+        - Real person names (not variable names)
+        - Email addresses (real, not example.com)
+        - Phone numbers
+        - Physical addresses
+        - SSN, passport, ID numbers
+        - Dates of birth linked to a person
 
     - name: corporate-identity
       severity: high
       action: block
       description: "Detect corporate identity leaks"
-      prompt: |
-        You are a corporate information auditor. Check if the code or
-        comments contain corporate identity markers that should not
-        be shared externally:
-        - Internal domain names (e.g. *.corp, *.internal, *.local, company-specific domains)
-        - Internal hostnames, service names, or infrastructure naming conventions
+      rules: |
+        - Internal domain names (*.corp, *.internal, *.local, company-specific)
+        - Internal hostnames, service names, infrastructure naming conventions
         - Corporate name, its derivatives and abbreviations
         - Corporate email addresses
         - Employee names, team names, department names
-        - Internal project codenames
-        - Internal URLs, Jira/Confluence links, wiki references
+        - Internal project codenames or identifiers
+        - Internal URLs (Jira, Confluence, wiki, Git)
         - Internal IP ranges, VPN endpoints
-        - Company-specific configuration keys or environment variable names
+        - Company-specific HTTP headers or config keys
         - References to internal systems, tools, or platforms by name
 
-        Respond ONLY with JSON (no markdown):
-        {"verdict": "clean", "confidence": 0.95, "findings": []}
-        or
-        {"verdict": "violation", "confidence": 0.9, "findings": ["Internal domain corp.example.com found", "Employee name in comment"]}
-
     # BACKLOG: proprietary code detection needs a custom embedder
-    # trained on the corporate codebase, not a single prompt.
     # - name: proprietary
     #   severity: medium
     #   action: warn
-    #   prompt: "..."
+    #   rules: "..."
 
 log:
   level: debug

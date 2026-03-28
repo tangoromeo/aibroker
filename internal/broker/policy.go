@@ -14,8 +14,22 @@ type PolicyConfig struct {
 	Severity    string `yaml:"severity"` // critical, high, medium, low
 	Action      string `yaml:"action"`   // block, warn
 	Description string `yaml:"description"`
-	Prompt      string `yaml:"prompt"`
+	Rules       string `yaml:"rules"`
 }
+
+const screeningPromptTemplate = `You are a security auditor. Analyze the content below for violations of this policy:
+
+POLICY: %s
+RULES:
+%s
+
+Check EVERY rule. If ANY rule is violated, verdict MUST be "violation".
+
+Respond ONLY with this JSON (no markdown, no explanation, no other text):
+{"verdict": "clean", "confidence": 0.95, "findings": []}
+or
+{"verdict": "violation", "confidence": 0.9, "findings": ["specific finding 1", "specific finding 2"]}
+`
 
 // LLMPolicyEngine evaluates content against policies using a local LLM.
 type LLMPolicyEngine struct {
@@ -47,7 +61,8 @@ func (e *LLMPolicyEngine) Evaluate(ctx context.Context, req *ChatRequest) (*Perm
 	for i, pol := range e.policies {
 		go func(idx int, p PolicyConfig) {
 			e.logger.Info("policy eval started", "policy", p.Name)
-			resp, err := e.client.Complete(ctx, p.Prompt, content)
+			prompt := fmt.Sprintf(screeningPromptTemplate, p.Description, p.Rules)
+			resp, err := e.client.Complete(ctx, prompt, content)
 			if err != nil {
 				ch <- result{idx: idx, err: fmt.Errorf("policy %s: %w", p.Name, err)}
 				return
@@ -56,6 +71,12 @@ func (e *LLMPolicyEngine) Evaluate(ctx context.Context, req *ChatRequest) (*Perm
 			if err != nil {
 				ch <- result{idx: idx, err: fmt.Errorf("policy %s: %w", p.Name, err)}
 				return
+			}
+			if v.Verdict == "suspicious" && v.Confidence == 0 {
+				e.logger.Warn("policy LLM returned non-JSON",
+					"policy", p.Name,
+					"raw_response", truncStr(resp, 500),
+				)
 			}
 			ch <- result{idx: idx, finding: Finding{
 				Policy:     p.Name,

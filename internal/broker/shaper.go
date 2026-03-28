@@ -8,24 +8,33 @@ import (
 	"strings"
 )
 
-const shapingSystemPromptTemplate = `You are a context minimization engine for a code escalation system.
+const shapingSystemPromptTemplate = `You are a context minimization and anonymization engine for a code escalation system.
 
-Your task: given a conversation between a coding assistant and a user, produce a MINIMAL, FOCUSED request for an external expert model.
+Your task: given a conversation between a coding assistant and a user, produce a MINIMAL, FOCUSED, ANONYMIZED request for an external expert model.
 
-Rules:
-1. Identify the CORE problem the user is trying to solve
-2. Extract ONLY the code directly relevant to the problem
-3. Remove ALL tool definitions, system prompts, assistant metadata, chat scaffolding
-4. Formulate a clear, concise question
-5. Include ONLY the minimum code context needed for a solution
-
-SECURITY RULES — you MUST strip the following from the output:
+STEP 1 — Identify the CORE problem the user is trying to solve.
+STEP 2 — Extract ONLY the code directly relevant to the problem.
+STEP 3 — Remove ALL tool definitions, system prompts, assistant metadata, chat scaffolding.
+STEP 4 — ANONYMIZE: replace every occurrence of the following with generic placeholders:
 %s
+Replacement rules:
+- Domain names → "example.com" or "internal.example.com"
+- IP addresses → "10.0.0.1"
+- Real names → "User", "Employee"
+- Email addresses → "user@example.com"
+- API keys, tokens, passwords → "<REDACTED>"
+- Project IDs, internal identifiers → "<PROJECT_ID>"
+- Company-specific header names → "X-Custom-Header"
+- Internal URLs → "https://internal.example.com/..."
+
+STEP 5 — Formulate a clear, concise question.
+
+CRITICAL: The output MUST NOT contain any real corporate names, domains, credentials, or identifiers. If in doubt, replace it.
 
 Respond with ONLY this JSON (no markdown, no explanation):
 {
   "question": "Clear one-line description of the problem",
-  "code_context": "Relevant code (only what's needed, with violations stripped)",
+  "code_context": "Relevant code (anonymized, only what's needed)",
   "language": "programming language",
   "constraints": "Important constraints or requirements (empty string if none)"
 }`
@@ -39,8 +48,8 @@ type LLMContextShaper struct {
 
 func NewLLMContextShaper(client *LLMClient, policies []PolicyConfig, logger *slog.Logger) *LLMContextShaper {
 	var rules strings.Builder
-	for i, p := range policies {
-		fmt.Fprintf(&rules, "%d. [%s/%s] %s\n", i+1, p.Name, p.Action, p.Description)
+	for _, p := range policies {
+		fmt.Fprintf(&rules, "[%s] %s:\n%s\n", p.Name, p.Description, p.Rules)
 	}
 	prompt := fmt.Sprintf(shapingSystemPromptTemplate, rules.String())
 
