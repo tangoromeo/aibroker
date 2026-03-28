@@ -63,6 +63,8 @@ func (s *LLMContextShaper) Shape(ctx context.Context, req *ChatRequest, perm *Pe
 		conversation = conversation[len(conversation)-32000:]
 	}
 
+	s.logger.Debug("shape: calling LLM", "conversation_bytes", len(conversation))
+
 	resp, err := s.client.Complete(ctx, s.systemPrompt, conversation)
 	if err != nil {
 		return nil, fmt.Errorf("context shaping LLM call: %w", err)
@@ -72,6 +74,8 @@ func (s *LLMContextShaper) Shape(ctx context.Context, req *ChatRequest, perm *Pe
 	if err != nil {
 		return nil, err
 	}
+
+	sanitizeShaped(shaped, s.logger)
 
 	// Build a clean chat completion request for the external model
 	userContent := shaped.Question
