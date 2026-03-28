@@ -4,10 +4,10 @@ listen: ":8080"
 # Primary upstream — local/corporate model (Kilo talks to this)
 upstream:
   url: "http://your-llm-endpoint"
-  api_key: "${UPSTREAM_API_KEY}=="
+  api_key: ""
   timeout: 5m
   headers:
-    ContinueDevProject: "${PROJECT_ID}"
+    ContinueDevProject: ""
   tls:
     insecure: false
 
