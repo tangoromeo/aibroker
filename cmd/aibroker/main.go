@@ -138,11 +138,13 @@ func runHTTP(ctx context.Context, cfg *config.Config, logger *slog.Logger) {
 	}
 
 	p := httpproxy.New(httpproxy.Config{
-		Upstream:   cfg.Upstream.URL,
-		APIKey:     cfg.Upstream.APIKey,
-		Timeout:    cfg.Upstream.Timeout,
-		Headers:    cfg.Upstream.Headers,
-		HTTPClient: httpClient,
+		Upstream:       cfg.Upstream.URL,
+		APIKey:         cfg.Upstream.APIKey,
+		AuthFromClient: cfg.Upstream.AuthFromClient,
+		ClientRouting:  cfg.Upstream.ClientRouting,
+		Timeout:        cfg.Upstream.Timeout,
+		Headers:        cfg.Upstream.Headers,
+		HTTPClient:     httpClient,
 	}, pipeline, logger)
 
 	srv := &http.Server{

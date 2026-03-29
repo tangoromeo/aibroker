@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"aibroker/internal/config"
 )
 
 func TestProxyForward(t *testing.T) {
@@ -134,6 +136,200 @@ func TestProxyHealth(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestProxyAuthFromClient(t *testing.T) {
+	var gotAuth, gotExtra string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotExtra = r.Header.Get("X-Suf")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer upstream.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	p := New(Config{
+		Upstream: upstream.URL,
+		AuthFromClient: &config.AuthFromClientConfig{
+			Enabled:     true,
+			ExtraHeader: "X-Suf",
+			Join:        "bearer_first",
+		},
+	}, nil, logger)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"test"}`))
+	req.Header.Set("Authorization", "Bearer aa")
+	req.Header.Set("X-Suf", "bb")
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d %s", w.Code, w.Body.String())
+	}
+	if gotAuth != "Bearer aabb" {
+		t.Fatalf("merged auth: got %q", gotAuth)
+	}
+	if gotExtra != "" {
+		t.Fatalf("suffix header should be stripped from upstream, got %q", gotExtra)
+	}
+}
+
+func TestProxyAuthFromClientMissingSuffix(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("upstream should not be called")
+	}))
+	defer upstream.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	p := New(Config{
+		Upstream: upstream.URL,
+		AuthFromClient: &config.AuthFromClientConfig{
+			Enabled:     true,
+			ExtraHeader: "X-Suf",
+		},
+	}, nil, logger)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"test"}`))
+	req.Header.Set("Authorization", "Bearer only")
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestProxyContinueColonBearerSplit(t *testing.T) {
+	var gotAuth, gotID string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotID = r.Header.Get("X-Backend-Id")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer upstream.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	p := New(Config{
+		Upstream: upstream.URL,
+		AuthFromClient: &config.AuthFromClientConfig{
+			Enabled:     true,
+			ExtraHeader: "X-Kilo-Suf",
+			Join:        "bearer_first",
+		},
+		ClientRouting: &config.ClientRoutingConfig{
+			Continue: config.ContinueRoutingConfig{
+				UserAgentSubstrings: []string{"Continue/"},
+				ColonBearerSplit: &config.ColonBearerSplitConfig{
+					Enabled:  true,
+					IDHeader: "X-Backend-Id",
+				},
+			},
+		},
+	}, nil, logger)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"test"}`))
+	req.Header.Set("User-Agent", "Continue/1.0")
+	req.Header.Set("Authorization", "Bearer openai-key:some-id")
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d %s", w.Code, w.Body.String())
+	}
+	if gotAuth != "Bearer openai-key" {
+		t.Fatalf("Authorization: want Bearer openai-key, got %q", gotAuth)
+	}
+	if gotID != "some-id" {
+		t.Fatalf("id header: want some-id, got %q", gotID)
+	}
+}
+
+func TestProxyContinueColonOnlyWithoutMergeExtraHeader(t *testing.T) {
+	var gotAuth, gotID string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotID = r.Header.Get("X-Backend-Id")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer upstream.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	p := New(Config{
+		Upstream: upstream.URL,
+		AuthFromClient: &config.AuthFromClientConfig{
+			Enabled: true,
+		},
+		ClientRouting: &config.ClientRoutingConfig{
+			Continue: config.ContinueRoutingConfig{
+				UserAgentSubstrings: []string{"Continue/"},
+				ColonBearerSplit: &config.ColonBearerSplitConfig{
+					Enabled:  true,
+					IDHeader: "X-Backend-Id",
+				},
+			},
+		},
+	}, nil, logger)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"test"}`))
+	req.Header.Set("User-Agent", "Continue/1.0")
+	req.Header.Set("Authorization", "Bearer keypart:idpart")
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	if gotAuth != "Bearer keypart" || gotID != "idpart" {
+		t.Fatalf("got auth %q id %q", gotAuth, gotID)
+	}
+}
+
+func TestProxyContinueExtraHeaderOverride(t *testing.T) {
+	var gotAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer upstream.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	p := New(Config{
+		Upstream: upstream.URL,
+		AuthFromClient: &config.AuthFromClientConfig{
+			Enabled:     true,
+			ExtraHeader: "X-Kilo-Suf",
+			Join:        "bearer_first",
+		},
+		ClientRouting: &config.ClientRoutingConfig{
+			Continue: config.ContinueRoutingConfig{
+				UserAgentSubstrings: []string{"Continue/"},
+				ExtraHeader:         "X-Cont-Suf",
+			},
+		},
+	}, nil, logger)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"test"}`))
+	req.Header.Set("User-Agent", "Continue/1.0")
+	req.Header.Set("Authorization", "Bearer A")
+	req.Header.Set("X-Cont-Suf", "B")
+	req.Header.Set("X-Kilo-Suf", "ignored")
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	if gotAuth != "Bearer AB" {
+		t.Fatalf("Continue path: want Bearer AB, got %q", gotAuth)
 	}
 }
 

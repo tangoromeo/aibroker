@@ -4,8 +4,27 @@ listen: ":8080"
 # Primary upstream — local/corporate model (Kilo talks to this)
 upstream:
   url: "http://your-llm-endpoint"
-  api_key: "${UPSTREAM_API_KEY}"
+  # Optional when auth_from_client is enabled: client sends split secret (Bearer + header).
+  # api_key: "${UPSTREAM_API_KEY}"
   timeout: 5m
+  # Reconstruct upstream API key from the request (keeps full key out of broker config).
+  # Client sends: Authorization: Bearer <part1>  and  extra_header: <part2>
+  # Upstream gets: Bearer (part1+part2) or (part2+part1) per join.
+  auth_from_client:
+    enabled: false
+    extra_header: "X-Corp-Api-Key-Suffix"
+    join: bearer_first # or header_first
+  # Continue.dev is matched separately (override extra_header if needed). Everyone else = OpenAI-compatible (Kilo, etc.).
+  client_routing:
+    continue:
+      user_agent_substrings:
+        - "Continue/"
+      header_present: "" # optional: require this header to classify as Continue
+      extra_header: ""   # optional: overrides auth_from_client.extra_header for Continue-only merge path
+      # Continue backend: token is "openai-key:some-id" — upstream Bearer = openai-key, some-id in id_header
+      colon_bearer_split:
+        enabled: false
+        id_header: "X-Continue-Request-Id" # set to what your Continue HTTP backend expects
   headers:
     # Custom headers passed to upstream (e.g. project ID, auth tokens)
     # MyProjectHeader: "project-id-here"

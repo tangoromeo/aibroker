@@ -10,23 +10,29 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"aibroker/internal/config"
 )
 
 type Proxy struct {
-	upstream   string
-	apiKey     string
-	headers    map[string]string
-	client     *http.Client
-	pipeline   Middleware
-	logger     *slog.Logger
+	upstream       string
+	apiKey         string
+	authFromClient *config.AuthFromClientConfig
+	clientRouting  *config.ClientRoutingConfig
+	headers        map[string]string
+	client         *http.Client
+	pipeline       Middleware
+	logger         *slog.Logger
 }
 
 type Config struct {
-	Upstream   string
-	APIKey     string
-	Timeout    time.Duration
-	Headers    map[string]string // extra headers to add to upstream requests
-	HTTPClient *http.Client      // optional pre-configured client (for custom TLS)
+	Upstream       string
+	APIKey         string
+	AuthFromClient *config.AuthFromClientConfig
+	ClientRouting  *config.ClientRoutingConfig
+	Timeout        time.Duration
+	Headers        map[string]string // extra headers to add to upstream requests
+	HTTPClient     *http.Client      // optional pre-configured client (for custom TLS)
 }
 
 func New(cfg Config, pipeline Middleware, logger *slog.Logger) *Proxy {
@@ -40,12 +46,14 @@ func New(cfg Config, pipeline Middleware, logger *slog.Logger) *Proxy {
 		client.Timeout = cfg.Timeout
 	}
 	return &Proxy{
-		upstream: strings.TrimRight(cfg.Upstream, "/"),
-		apiKey:   cfg.APIKey,
-		headers:  cfg.Headers,
-		client:   client,
-		pipeline: pipeline,
-		logger:   logger,
+		upstream:       strings.TrimRight(cfg.Upstream, "/"),
+		apiKey:         cfg.APIKey,
+		authFromClient: cfg.AuthFromClient,
+		clientRouting:  cfg.ClientRouting,
+		headers:        cfg.Headers,
+		client:         client,
+		pipeline:       pipeline,
+		logger:         logger,
 	}
 }
 
@@ -110,8 +118,18 @@ func (p *Proxy) forwardHandler() Handler {
 			}
 		}
 
-		if p.apiKey != "" {
-			upReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+		authz, strip, extraAuth, err := p.resolveUpstreamAuth(req.HTTP)
+		if err != nil {
+			return unauthorizedResponse(err.Error()), nil
+		}
+		if authz != "" {
+			upReq.Header.Set("Authorization", authz)
+			for _, h := range strip {
+				upReq.Header.Del(h)
+			}
+		}
+		for k, v := range extraAuth {
+			upReq.Header.Set(k, v)
 		}
 
 		for k, v := range p.headers {
@@ -180,4 +198,43 @@ func extractMeta(body []byte) (model string, stream bool) {
 func isSSE(resp *http.Response) bool {
 	ct := resp.Header.Get("Content-Type")
 	return strings.Contains(ct, "text/event-stream")
+}
+
+func (p *Proxy) resolveUpstreamAuth(r *http.Request) (authorization string, strip []string, extra map[string]string, err error) {
+	if p.authFromClient != nil && p.authFromClient.Enabled {
+		kind := DetectClientKind(r, p.clientRouting)
+		if kind == ClientContinue && p.clientRouting != nil &&
+			p.clientRouting.Continue.ColonBearerSplit != nil && p.clientRouting.Continue.ColonBearerSplit.Enabled {
+			authz, extraH, err := colonBearerSplitContinue(r, p.clientRouting.Continue.ColonBearerSplit.IDHeader)
+			if err != nil {
+				return "", nil, nil, err
+			}
+			return authz, nil, extraH, nil
+		}
+		extraHdr := resolveSplitExtraHeader(kind, p.authFromClient, p.clientRouting)
+		if extraHdr == "" {
+			return "", nil, nil, fmt.Errorf("auth_from_client: extra_header not configured for OpenAI-compatible clients (Kilo, etc.); set upstream.auth_from_client.extra_header or route only Continue with colon_bearer_split")
+		}
+		key, err := mergeSplitAPIKey(r, p.authFromClient.Join, extraHdr)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		return "Bearer " + key, []string{extraHdr}, nil, nil
+	}
+	if p.apiKey != "" {
+		return "Bearer " + p.apiKey, nil, nil, nil
+	}
+	return "", nil, nil, nil
+}
+
+func unauthorizedResponse(msg string) *http.Response {
+	body := fmt.Sprintf(`{"error":{"message":%q,"type":"authentication_error"}}`, msg)
+	return &http.Response{
+		StatusCode: http.StatusUnauthorized,
+		Proto:      "HTTP/1.1",
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
 }
