@@ -166,26 +166,8 @@ func validate(cfg *Config) error {
 		if cfg.Upstream.URL == "" {
 			return fmt.Errorf("config: upstream.url is required in http mode")
 		}
-		if cfg.Upstream.AuthFromClient != nil && cfg.Upstream.AuthFromClient.Enabled {
-			colonOK := cfg.Upstream.ClientRouting != nil &&
-				cfg.Upstream.ClientRouting.Continue.ColonBearerSplit != nil &&
-				cfg.Upstream.ClientRouting.Continue.ColonBearerSplit.Enabled &&
-				cfg.Upstream.ClientRouting.Continue.ColonBearerSplit.IDHeader != ""
-			if cfg.Upstream.AuthFromClient.ExtraHeader == "" && !colonOK {
-				return fmt.Errorf("config: upstream.auth_from_client.extra_header is required when auth_from_client.enabled (unless continue.colon_bearer_split is fully configured)")
-			}
-			if cfg.Upstream.AuthFromClient.ExtraHeader != "" {
-				switch cfg.Upstream.AuthFromClient.Join {
-				case "", "bearer_first", "header_first":
-				default:
-					return fmt.Errorf("config: upstream.auth_from_client.join must be bearer_first or header_first")
-				}
-			}
-		}
-		if cr := cfg.Upstream.ClientRouting; cr != nil && cr.Continue.ColonBearerSplit != nil && cr.Continue.ColonBearerSplit.Enabled {
-			if cr.Continue.ColonBearerSplit.IDHeader == "" {
-				return fmt.Errorf("config: client_routing.continue.colon_bearer_split.id_header is required when colon_bearer_split.enabled")
-			}
+		if err := validateAuthFromClient(cfg.Upstream.AuthFromClient, cfg.Upstream.ClientRouting, "upstream"); err != nil {
+			return err
 		}
 	case "stdio":
 		if cfg.Agent.Command == "" {
@@ -193,6 +175,31 @@ func validate(cfg *Config) error {
 		}
 	default:
 		return fmt.Errorf("config: mode must be http or stdio, got %q", cfg.Mode)
+	}
+	return nil
+}
+
+func validateAuthFromClient(auth *AuthFromClientConfig, routing *ClientRoutingConfig, fieldPrefix string) error {
+	if auth != nil && auth.Enabled {
+		colonOK := routing != nil &&
+			routing.Continue.ColonBearerSplit != nil &&
+			routing.Continue.ColonBearerSplit.Enabled &&
+			routing.Continue.ColonBearerSplit.IDHeader != ""
+		if auth.ExtraHeader == "" && !colonOK {
+			return fmt.Errorf("config: %s.auth_from_client.extra_header is required when auth_from_client.enabled (unless continue.colon_bearer_split is fully configured)", fieldPrefix)
+		}
+		if auth.ExtraHeader != "" {
+			switch auth.Join {
+			case "", "bearer_first", "header_first":
+			default:
+				return fmt.Errorf("config: %s.auth_from_client.join must be bearer_first or header_first", fieldPrefix)
+			}
+		}
+	}
+	if routing != nil && routing.Continue.ColonBearerSplit != nil && routing.Continue.ColonBearerSplit.Enabled {
+		if routing.Continue.ColonBearerSplit.IDHeader == "" {
+			return fmt.Errorf("config: %s.client_routing.continue.colon_bearer_split.id_header is required when colon_bearer_split.enabled", fieldPrefix)
+		}
 	}
 	return nil
 }
