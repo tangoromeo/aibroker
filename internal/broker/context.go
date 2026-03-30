@@ -6,6 +6,7 @@ type ctxKey struct{}
 
 // EscalationState is shared between broker middleware via request context.
 type EscalationState struct {
+	CycleID    string
 	Triggered  bool
 	Signal     EscalationSignal
 	Permission *Permission
